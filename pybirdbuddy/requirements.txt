@@ -1,0 +1,2 @@
+python-graphql-client==0.4.3
+langcodes==3.3.0
