@@ -146,7 +146,7 @@ def run_ffmpeg(in_url, out_url, log_level="warning"):
             "-c:a", "copy",
             "-f", "rtsp", out_url
         ]
-        process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr)
+        process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr, preexec_fn=os.setsid)
         return process
     except FileNotFoundError:
         print("Error: ffmpeg not found. Make sure it's installed and in your PATH.")

@@ -316,30 +316,6 @@ class BirdBuddy:
 
         return result
 
-    # async def watchingStartCheck(self, feeder: Feeder) -> dict:
-    #     if isinstance(feeder, Feeder):
-    #         feeder_id = feeder.id
-    #         if not feeder.is_owner:
-    #             LOGGER.warning("Watching is only available to owner accounts (technically to premium accounts too but not supporting that now.)")
-    #     else:
-    #         feeder_id = feeder
-    #     variables = {
-    #         "feederId": feeder_id,
-    #         "startWatchingInput": {
-    #             "feederId": feeder_id,
-    #         },
-    #     }
-
-    #     result = await self._make_request(
-    #         query=queries.feeder.WATCHING_START_CHECK,
-    #         variables=variables,
-    #         subscript="watchingStartV2"
-    #     )
-
-    #     LOGGER.debug(result)
-
-    #     return result
-
     async def toggle_off_grid(
         self,
         feeder: Feeder | str,
