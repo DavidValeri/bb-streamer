@@ -27,6 +27,7 @@ from pybirdbuddy.birdbuddy.client import BirdBuddy
 from pybirdbuddy.birdbuddy.feeder import FeederState
 
 terminate = False
+RECOVERY_FILE_PATH = "/config/recovery.state"
 
 def main():
     global root
@@ -38,8 +39,9 @@ def main():
     parser.add_argument('--feeder_name', type=str, required=True, help='Feeder name')
     parser.add_argument('--out_url', type=str, required=True, help='Output URL for ffmpeg')
     parser.add_argument('--log_level', type=str, default='INFO', help='Log level')
-    parser.add_argument('--min_starting_battery_level', type=int, default=60, help='Minimum battery level to start stream')
-    parser.add_argument('--min_battery_level', type=int, default=30, help='Minimum battery level at which the stream is stopped')
+    parser.add_argument('--min_starting_battery_level', type=int, default=70, help='Minimum battery level to start streaming after entering recovery state')
+    parser.add_argument('--min_battery_level', type=int, default=40, help='Battery level at which the stream is stopped and recovery state is entered')
+    parser.add_argument('--output_codec', type=str, default='copy', help='ffmpeg codec for output transcoding')
 
     args = parser.parse_args()
 
@@ -55,16 +57,26 @@ def main():
 
     feeder = get_feeder_by_name(bb, args.feeder_name)
     if not feeder:
-        LOGGER.info("Feeder with name '%s' not found.", args.feeder_name)
+        LOGGER.error("Feeder with name '%s' not found.", args.feeder_name)
         return 2
     
     if feeder.state != FeederState.READY_TO_STREAM and feeder.state != FeederState.STREAMING:
         LOGGER.error("Feeder is not streaming or ready to stream.")
         return 3
 
-    if feeder.battery.percentage < args.min_starting_battery_level:
-        LOGGER.error("Battery level, %s, is less than %s. Not starting stream.", feeder.battery.percentage, args.min_starting_battery_level)
+    if feeder.battery.percentage < args.min_battery_level:
+        LOGGER.error("Battery level, %s, is less than %s. Entering recovery state.", feeder.battery.percentage, args.min_battery_level)
+        with open(RECOVERY_FILE_PATH, 'w') as f:
+            f.write('')
         return 4
+
+    if os.path.exists(RECOVERY_FILE_PATH):
+        if feeder.battery.percentage < args.min_starting_battery_level:
+            LOGGER.error("Battery level, %s, is less than %s. Not starting stream due to recovery state.", feeder.battery.percentage, args.min_starting_battery_level)
+            return 5
+
+    if os.path.exists(RECOVERY_FILE_PATH):
+        os.remove(RECOVERY_FILE_PATH)
 
     result = asyncio.run(bb.watching_start(feeder.id))
     LOGGER.info("Birdbuddy stream started.")
@@ -76,6 +88,7 @@ def main():
     ffmpeg_process = run_ffmpeg(
         result["watching"]["streamUrl"],
         args.out_url,
+        args.output_codec,
         "info" if args.log_level == "DEBUG" else "warning")
 
     if ffmpeg_process is None:
@@ -90,17 +103,22 @@ def main():
             if terminate:
                 break
             time.sleep(10)
-            asyncio.run(bb.watching_active_keep())
-            LOGGER.info("Refreshed stream.")
+            try:
+                asyncio.run(bb.watching_active_keep())
+                LOGGER.info("Refreshed stream.")
+            except Exception as e:
+                LOGGER.warning("Error refreshing stream: %s", e)
             i += 1
 
         try:
             asyncio.run(bb.refresh())
         except Exception as e:
-            LOGGER.error("Error refreshing Birdbuddy: %s", e)
+            LOGGER.warning("Error refreshing Birdbuddy: %s", e)
 
         if feeder.battery.percentage < args.min_battery_level:
-            LOGGER.info("Battery level, %s, is below %s. Stopping stream.", feeder.battery.percentage, args.min_battery_level)
+            LOGGER.error("Battery level, %s, is less than %s. Entering recovery state.", feeder.battery.percentage, args.min_battery_level)
+            with open(RECOVERY_FILE_PATH, 'w') as f:
+                f.write('')
             terminate = True
 
     if terminate:
@@ -114,13 +132,10 @@ def main():
                 os.killpg(os.getpgid(ffmpeg_process.pid), signal.SIGKILL)
                 time.sleep(5)
 
-        LOGGER.debug("ffmpeg process return code: %s", ffmpeg_process.returncode)
-        LOGGER.info("Exiting...")
-        return 0
-    else:
-        LOGGER.info("Exiting...")
-        LOGGER.info("ffmpeg terminated: {ffmpeg_process.returncode}")
-        return 6
+    LOGGER.debug("ffmpeg process return code: %s", ffmpeg_process.returncode)
+    LOGGER.info("Done.")
+
+    return 0
 
 def get_feeder_by_name(bb, name):
     for feeder_id, feeder in bb.feeders.items():
@@ -133,23 +148,21 @@ def get_feeder_by_name(bb, name):
 
     return None
 
-def run_ffmpeg(in_url, out_url, log_level="warning"):
+def run_ffmpeg(in_url, out_url, output_codec, log_level="warning"):
     try:
         command = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel", log_level.lower(),
             "-i", in_url,
-            "-c:v", "libx264",
-            "-profile:v", "main",
-            "-preset", "veryfast",
+            "-c:v", output_codec,
             "-c:a", "copy",
             "-f", "rtsp", out_url
         ]
         process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr, preexec_fn=os.setsid)
         return process
     except FileNotFoundError:
-        print("Error: ffmpeg not found. Make sure it's installed and in your PATH.")
+        LOGGER.error("Error: ffmpeg not found. Make sure it's installed and in your PATH.")
         return None
 
 def signal_handler(sig, frame):
