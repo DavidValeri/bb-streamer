@@ -27,7 +27,9 @@ from pybirdbuddy.birdbuddy.client import BirdBuddy
 from pybirdbuddy.birdbuddy.feeder import FeederState
 
 terminate = False
-RECOVERY_FILE_PATH = "/config/recovery.state"
+RECOVERY_FILE_PATH = "/config/recovery"
+TOKEN_FILE_PATH = "/config/tokens"
+COOLOFF_FILE_PATH = "/config/cooloff"
 
 def main():
     global root
@@ -47,33 +49,50 @@ def main():
 
     root.setLevel(args.log_level)
 
-    bb = BirdBuddy(args.username, args.password)
+    if os.path.exists(COOLOFF_FILE_PATH):
+        with open(COOLOFF_FILE_PATH, 'r') as f:
+            cooldown_timestamp = int(f.read().strip())
+        if time.time() < cooldown_timestamp:
+            LOGGER.error("Cooloff period active. Exiting.")
+            return 1
+        else:
+            os.remove(COOLOFF_FILE_PATH)
+
+    bb = init_bb(args)
 
     try:
         asyncio.run(bb.refresh())
+        save_tokens(bb)
     except Exception as e:
         LOGGER.error("Error refreshing Birdbuddy: %s", e)
-        return 1
+        return 2
 
     feeder = get_feeder_by_name(bb, args.feeder_name)
     if not feeder:
         LOGGER.error("Feeder with name '%s' not found.", args.feeder_name)
-        return 2
+        return 3
     
     if feeder.state != FeederState.READY_TO_STREAM and feeder.state != FeederState.STREAMING:
+        if feeder.state in [FeederState.DEEP_SLEEP, FeederState.OFFLINE, FeederState.OFF_GRID, FeederState.OUT_OF_FEEDER]:
+            set_cooloff()
+
         LOGGER.error("Feeder is not streaming or ready to stream.")
-        return 3
+        return 4
+
+    if os.path.exists(COOLOFF_FILE_PATH):
+        os.remove(COOLOFF_FILE_PATH)
 
     if feeder.battery.percentage < args.min_battery_level:
         LOGGER.error("Battery level, %s, is less than %s. Entering recovery state.", feeder.battery.percentage, args.min_battery_level)
         with open(RECOVERY_FILE_PATH, 'w') as f:
             f.write('')
-        return 4
+        set_cooloff()
+        return 5
 
     if os.path.exists(RECOVERY_FILE_PATH):
         if feeder.battery.percentage < args.min_starting_battery_level:
             LOGGER.error("Battery level, %s, is less than %s. Not starting stream due to recovery state.", feeder.battery.percentage, args.min_starting_battery_level)
-            return 5
+            return 6
 
     if os.path.exists(RECOVERY_FILE_PATH):
         os.remove(RECOVERY_FILE_PATH)
@@ -92,7 +111,7 @@ def main():
         "info" if args.log_level == "DEBUG" else "warning")
 
     if ffmpeg_process is None:
-        return 5
+        return 7
 
     LOGGER.info("ffmpeg started.")
 
@@ -112,6 +131,7 @@ def main():
 
         try:
             asyncio.run(bb.refresh())
+            save_tokens(bb)
         except Exception as e:
             LOGGER.warning("Error refreshing Birdbuddy: %s", e)
 
@@ -137,13 +157,33 @@ def main():
 
     return 0
 
+def init_bb(args):
+    if os.path.exists(TOKEN_FILE_PATH):
+        LOGGER.debug("Found token file. Using cached tokens.")
+        with open(TOKEN_FILE_PATH, 'r') as f:
+            tokens = f.readlines()
+            refresh_token = tokens[0].strip().split('=')[1]
+            access_token = tokens[1].strip().split('=')[1]
+        bb = BirdBuddy(args.username, args.password, refresh_token, access_token)
+    else:
+        LOGGER.debug("No token file found.")
+        bb = BirdBuddy(args.username, args.password)
+    return bb
+
+def save_tokens(bb):
+    with open(TOKEN_FILE_PATH, 'w') as f:
+        f.write(f"refresh_token={bb._refresh_token}\n")
+        f.write(f"access_token={bb._access_token}\n")
+
+def set_cooloff():
+    with open(COOLOFF_FILE_PATH, 'w') as f:
+        f.write(str(int(time.time()) + 10 * 60))
+    LOGGER.info("Set cooloff.")
+
 def get_feeder_by_name(bb, name):
     for feeder_id, feeder in bb.feeders.items():
         if feeder.name == name:
-            if LOGGER.isEnabledFor(logging.DEBUG):
-                LOGGER.debug("Found feeder: %s (ID: %s): %s", feeder.name, feeder_id, feeder)
-            else: 
-                LOGGER.info("Found feeder: %s (ID: %s)", feeder.name, feeder_id)
+            LOGGER.info("Found feeder: %s (ID: %s): %s", feeder.name, feeder_id, feeder)
             return feeder
 
     return None
