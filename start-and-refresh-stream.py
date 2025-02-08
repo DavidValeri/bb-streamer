@@ -104,14 +104,20 @@ def main():
         LOGGER.info("Received termination signal. Exiting...")
         return 0
 
+    in_url = result["watching"]["streamUrl"]
+    if in_url is None:
+        LOGGER.error("Stream URL was None.")
+        set_cooloff()
+        return 7
+
     ffmpeg_process = run_ffmpeg(
-        result["watching"]["streamUrl"],
+        in_url,
         args.out_url,
         args.output_codec,
         "info" if args.log_level == "DEBUG" else "warning")
 
     if ffmpeg_process is None:
-        return 7
+        return 8
 
     LOGGER.info("ffmpeg started.")
 
