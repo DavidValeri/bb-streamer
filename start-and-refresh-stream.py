@@ -136,16 +136,15 @@ def run(args):
 
     LOGGER.info("ffmpeg started.")
 
+    # Refresh stream every 30 seconds. Recheck feeder states every 5 minutes.
     while not terminate and ffmpeg_process.poll() is None:
-        # Refresh stream every 10 seconds for one minute before rechecking battery level.
         i = 0
-        while i < 6 and not terminate:
-            if terminate:
-                break
-            time.sleep(5)
-            if terminate:
-                break
-            time.sleep(5)
+        while i < 10 and not terminate:
+            j = 0
+            while j < 6 and not terminate:
+                time.sleep(5)
+                j += 1
+
             try:
                 asyncio.run(bb.watching_active_keep())
                 LOGGER.info("Refreshed stream.")
