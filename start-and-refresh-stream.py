@@ -40,14 +40,29 @@ def main():
     parser.add_argument('--password', type=str, required=True, help='BirdBuddy password')
     parser.add_argument('--feeder_name', type=str, required=True, help='Feeder name')
     parser.add_argument('--out_url', type=str, required=True, help='Output URL for ffmpeg')
-    parser.add_argument('--log_level', type=str, default='INFO', help='Log level')
-    parser.add_argument('--min_starting_battery_level', type=int, default=70, help='Minimum battery level to start streaming after entering recovery state')
-    parser.add_argument('--min_battery_level', type=int, default=40, help='Battery level at which the stream is stopped and recovery state is entered')
-    parser.add_argument('--output_codec', type=str, default='copy', help='ffmpeg codec for output transcoding')
+    parser.add_argument('--log_level', type=str, default='INFO', help='Log level. Default INFO.')
+    parser.add_argument('--min_starting_battery_level', type=int, default=70, help='Minimum battery level to start streaming after entering recovery state. Default 70%.')
+    parser.add_argument('--min_battery_level', type=int, default=40, help='Battery level at which the stream is stopped and recovery state is entered. Default 40%.')
+    parser.add_argument('--output_codec', type=str, default='copy', help='ffmpeg codec for output transcoding. Default "copy".')
+    parser.add_argument('--continuous', type=bool, default=False, help='If the program should run continuously, attempting to start / restart the stream repeatedly, or if it should try just once. Default false.')
 
     args = parser.parse_args()
 
     root.setLevel(args.log_level)
+
+    while (not terminate):
+        LOGGER.info("Starting / Restarting...")
+        run(args)
+        if not args.continuous:
+            break
+        time.sleep(5)
+
+    LOGGER.info("Done.")
+
+    return 0
+
+def run(args):
+    global terminate
 
     if os.path.exists(COOLOFF_FILE_PATH):
         with open(COOLOFF_FILE_PATH, 'r') as f:
@@ -106,7 +121,7 @@ def main():
 
     in_url = result["watching"]["streamUrl"]
     if in_url is None:
-        LOGGER.error("Stream URL was None.")
+        LOGGER.error("Stream URL was empty.")
         set_cooloff()
         return 7
 
@@ -114,7 +129,7 @@ def main():
         in_url,
         args.out_url,
         args.output_codec,
-        "info" if args.log_level == "DEBUG" else "warning")
+        args.log_level)
 
     if ffmpeg_process is None:
         return 8
@@ -127,7 +142,10 @@ def main():
         while i < 6 and not terminate:
             if terminate:
                 break
-            time.sleep(10)
+            time.sleep(5)
+            if terminate:
+                break
+            time.sleep(5)
             try:
                 asyncio.run(bb.watching_active_keep())
                 LOGGER.info("Refreshed stream.")
@@ -152,16 +170,12 @@ def main():
         if ffmpeg_process.poll() is None:
             LOGGER.info("ffmpeg process still running. Terminating...")
             ffmpeg_process.terminate()
-            time.sleep(5)
+            time.sleep(2)
             if ffmpeg_process.poll() is None:
                 LOGGER.info("ffmpeg process still running. Killing...")
                 os.killpg(os.getpgid(ffmpeg_process.pid), signal.SIGKILL)
-                time.sleep(5)
 
     LOGGER.debug("ffmpeg process return code: %s", ffmpeg_process.returncode)
-    LOGGER.info("Done.")
-
-    return 0
 
 def init_bb(args):
     if os.path.exists(TOKEN_FILE_PATH):
@@ -199,7 +213,7 @@ def run_ffmpeg(in_url, out_url, output_codec, log_level="warning"):
         command = [
             "ffmpeg",
             "-hide_banner",
-            "-loglevel", log_level.lower(),
+            "-loglevel", "info" if log_level == "DEBUG" else "warning",
             "-i", in_url,
             "-c:v", output_codec,
             "-c:a", "copy",

@@ -12,18 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Use go2rtc base image. Comes with Python 3.
-FROM alexxit/go2rtc 
+# Use Python base image
+FROM python:3.9-slim
 
 # Set the working directory inside the container
 WORKDIR /app
 
+# Install ffmpeg
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+
 # Copy requirements file
-COPY requirements.txt .
+COPY ../../requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the application code
-COPY start-and-refresh-stream.py .
-COPY pybirdbuddy /app/pybirdbuddy
+COPY ../../start-and-refresh-stream.py .
+COPY ../../pybirdbuddy /app/pybirdbuddy/
+
+# Set the entry point to start the application
+ENTRYPOINT ["python", "start-and-refresh-stream.py"]
+CMD [ "-h" ]
