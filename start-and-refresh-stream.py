@@ -25,11 +25,14 @@ import os
 
 from pybirdbuddy.birdbuddy.client import BirdBuddy
 from pybirdbuddy.birdbuddy.feeder import FeederState
+from astral import LocationInfo
+from astral.sun import sun
+from datetime import datetime, timedelta
 
 terminate = False
 RECOVERY_FILE_PATH = "/config/recovery"
 TOKEN_FILE_PATH = "/config/tokens"
-COOLOFF_FILE_PATH = "/config/cooloff"
+COOLDOWN_FILE_PATH = "/config/cooldown"
 
 def main():
     global root
@@ -45,85 +48,101 @@ def main():
     parser.add_argument('--min_battery_level', type=int, default=40, help='Battery level at which the stream is stopped and recovery state is entered. Default 40%.')
     parser.add_argument('--output_codec', type=str, default='copy', help='ffmpeg codec for output transcoding. Default "copy".')
     parser.add_argument('--continuous', type=bool, default=False, help='If the program should run continuously, attempting to start / restart the stream repeatedly, or if it should try just once. Default false.')
+    parser.add_argument('--latitude', type=float, required=True, help='Latitude for location.')
+    parser.add_argument('--longitude', type=float, required=True, help='Longitude for location.')
+    parser.add_argument('--timezone', type=str, required=True, help='Timezone for location.')
 
     args = parser.parse_args()
 
     root.setLevel(args.log_level)
 
+    city = LocationInfo("Home", "WhereItsAt", args.timezone, latitude=args.latitude, longitude=args.longitude)
+    LOGGER.debug("Using $s for sunset calculations.", city)
+
+    return_code = 0
     while (not terminate):
-        LOGGER.info("Starting / Restarting...")
-        run(args)
+        LOGGER.info("Starting / Restarting stream.")
+        return_code = run(args, city)
         if not args.continuous:
             break
         time.sleep(5)
 
-    LOGGER.info("Done.")
+    LOGGER.info("Goodbye.")
 
-    return 0
+    return return_code
 
-def run(args):
+def run(args, city):
     global terminate
 
-    if os.path.exists(COOLOFF_FILE_PATH):
-        with open(COOLOFF_FILE_PATH, 'r') as f:
-            cooldown_timestamp = int(f.read().strip())
-        if time.time() < cooldown_timestamp:
-            LOGGER.error("Cooloff period active. Exiting.")
-            return 1
-        else:
-            os.remove(COOLOFF_FILE_PATH)
+    if is_in_cooldown():
+        LOGGER.info("Cooldown period active. Skipping stream initialization.")
+        return 1
 
-    bb = init_bb(args)
+    clear_cooldown()
+
+    try:
+        bb = init_bb(args)
+    except Exception as e:
+        LOGGER.error("Error initializing Bird Buddy: %s", e)
+        return 2
 
     try:
         asyncio.run(bb.refresh())
         save_tokens(bb)
     except Exception as e:
-        LOGGER.error("Error refreshing Birdbuddy: %s", e)
-        return 2
+        LOGGER.error("Error refreshing Bird Buddy: %s", e)
+        return 3
 
     feeder = get_feeder_by_name(bb, args.feeder_name)
     if not feeder:
-        LOGGER.error("Feeder with name '%s' not found.", args.feeder_name)
-        return 3
+        LOGGER.error(
+            "Feeder with name '%s' not found. Available feeders: %s",
+            args.feeder_name,
+            [feeder.name for feeder in bb.feeders.values()])
+        return 4
     
     if feeder.state != FeederState.READY_TO_STREAM and feeder.state != FeederState.STREAMING:
+        LOGGER.error("Feeder state, '%s', is not streaming or ready to stream.", feeder.state)
         if feeder.state in [FeederState.DEEP_SLEEP, FeederState.OFFLINE, FeederState.OFF_GRID, FeederState.OUT_OF_FEEDER]:
-            set_cooloff()
+            set_cooldown()
+        return 5
 
-        LOGGER.error("Feeder is not streaming or ready to stream.")
-        return 4
-
-    if os.path.exists(COOLOFF_FILE_PATH):
-        os.remove(COOLOFF_FILE_PATH)
+    if is_sleepy_time(city):
+        LOGGER.info("Feeder is preparing to enter deep sleep state. Skipping stream initialization.")
+        set_cooldown()
+        return 6
 
     if feeder.battery.percentage < args.min_battery_level:
-        LOGGER.error("Battery level, %s, is less than %s. Entering recovery state.", feeder.battery.percentage, args.min_battery_level)
-        with open(RECOVERY_FILE_PATH, 'w') as f:
-            f.write('')
-        set_cooloff()
-        return 5
+        LOGGER.error(
+            "Battery level, %s, is less than %s. Entering recovery state.",
+            feeder.battery.percentage,
+            args.min_battery_level)
+        set_recovery()
+        set_cooldown()
+        return 7
 
     if os.path.exists(RECOVERY_FILE_PATH):
         if feeder.battery.percentage < args.min_starting_battery_level:
-            LOGGER.error("Battery level, %s, is less than %s. Not starting stream due to recovery state.", feeder.battery.percentage, args.min_starting_battery_level)
-            return 6
+            LOGGER.error(
+                "Battery level, %s, is less than %s. Not starting stream due to recovery state.",
+                feeder.battery.percentage,
+                args.min_starting_battery_level)
+            return 8
 
-    if os.path.exists(RECOVERY_FILE_PATH):
-        os.remove(RECOVERY_FILE_PATH)
+    clear_recovery()
 
     result = asyncio.run(bb.watching_start(feeder.id))
     LOGGER.info("Birdbuddy stream started.")
 
     if terminate:
-        LOGGER.info("Received termination signal. Exiting...")
+        LOGGER.info("Received termination signal. Skipping stream initialization.")
         return 0
 
     in_url = result["watching"]["streamUrl"]
     if in_url is None:
         LOGGER.error("Stream URL was empty.")
-        set_cooloff()
-        return 7
+        set_cooldown()
+        return 9
 
     ffmpeg_process = run_ffmpeg(
         in_url,
@@ -132,7 +151,7 @@ def run(args):
         args.log_level)
 
     if ffmpeg_process is None:
-        return 8
+        return 10
 
     LOGGER.info("ffmpeg started.")
 
@@ -146,8 +165,8 @@ def run(args):
                 j += 1
 
             try:
-                asyncio.run(bb.watching_active_keep())
-                LOGGER.info("Refreshed stream.")
+                refresh_result = asyncio.run(bb.watching_active_keep())
+                LOGGER.info("Refreshed stream. %s", refresh_result)
             except Exception as e:
                 LOGGER.warning("Error refreshing stream: %s", e)
             i += 1
@@ -156,15 +175,19 @@ def run(args):
             asyncio.run(bb.refresh())
             save_tokens(bb)
         except Exception as e:
-            LOGGER.warning("Error refreshing Birdbuddy: %s", e)
+            LOGGER.warning("Error refreshing Bird Buddy: %s", e)
 
         if feeder.battery.percentage < args.min_battery_level:
             LOGGER.error("Battery level, %s, is less than %s. Entering recovery state.", feeder.battery.percentage, args.min_battery_level)
-            with open(RECOVERY_FILE_PATH, 'w') as f:
-                f.write('')
-            terminate = True
+            set_recovery()
+            set_cooldown()
+            break
 
-    if terminate:
+        if is_sleepy_time(city):
+            LOGGER.info("Stopping stream to allow feeder to enter deep sleep state.")
+            break
+
+    if ffmpeg_process.poll() is None:
         LOGGER.info("Stopping ffmpeg...")
         if ffmpeg_process.poll() is None:
             LOGGER.info("ffmpeg process still running. Terminating...")
@@ -174,7 +197,14 @@ def run(args):
                 LOGGER.info("ffmpeg process still running. Killing...")
                 os.killpg(os.getpgid(ffmpeg_process.pid), signal.SIGKILL)
 
+    LOGGER.info("ffmpeg process stopped.")
     LOGGER.debug("ffmpeg process return code: %s", ffmpeg_process.returncode)
+
+    return 0
+
+def clear_recovery():
+    if os.path.exists(RECOVERY_FILE_PATH):
+        os.remove(RECOVERY_FILE_PATH)
 
 def init_bb(args):
     if os.path.exists(TOKEN_FILE_PATH):
@@ -194,10 +224,35 @@ def save_tokens(bb):
         f.write(f"refresh_token={bb._refresh_token}\n")
         f.write(f"access_token={bb._access_token}\n")
 
-def set_cooloff():
-    with open(COOLOFF_FILE_PATH, 'w') as f:
+def set_cooldown():
+    with open(COOLDOWN_FILE_PATH, 'w') as f:
         f.write(str(int(time.time()) + 10 * 60))
-    LOGGER.info("Set cooloff.")
+    LOGGER.info("Set cooldown.")
+
+def is_in_cooldown():
+    if os.path.exists(COOLDOWN_FILE_PATH):
+        with open(COOLDOWN_FILE_PATH, 'r') as f:
+            cooldown_time = int(f.read().strip())
+            if time.time() < cooldown_time:
+                return True
+
+    return False
+
+def clear_cooldown():
+    if os.path.exists(COOLDOWN_FILE_PATH):
+        os.remove(COOLDOWN_FILE_PATH)
+        LOGGER.debug("Cleared cooldown.")
+
+def set_recovery():
+    with open(RECOVERY_FILE_PATH, 'w') as f:
+        f.write('')
+
+def is_sleepy_time(city):
+    s = sun(city.observer, tzinfo=city.timezone)
+    sunset = s['sunset']
+    now = datetime.now(sunset.tzinfo)
+    LOGGER.debug("It is currently %s. Calculated sun information: %s", now, s)
+    return now > sunset + timedelta(minutes=10)   
 
 def get_feeder_by_name(bb, name):
     for feeder_id, feeder in bb.feeders.items():
@@ -208,6 +263,7 @@ def get_feeder_by_name(bb, name):
     return None
 
 def run_ffmpeg(in_url, out_url, output_codec, log_level="warning"):
+    process = None
     try:
         command = [
             "ffmpeg",
@@ -218,11 +274,16 @@ def run_ffmpeg(in_url, out_url, output_codec, log_level="warning"):
             "-c:a", "copy",
             "-f", "rtsp", out_url
         ]
+
+        LOGGER.debug("ffmpeg command: %s", command)
         process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr, preexec_fn=os.setsid)
-        return process
+        LOGGER.debug("ffmpeg process started: %s", process.pid)
     except FileNotFoundError:
-        LOGGER.error("Error: ffmpeg not found. Make sure it's installed and in your PATH.")
-        return None
+        LOGGER.error("ffmpeg not found. Make sure it's installed and in your PATH.")
+    except Exception as e:
+        LOGGER.error("Error starting ffmpeg: %s", e)
+
+    return process
 
 def signal_handler(sig, frame):
     global terminate
