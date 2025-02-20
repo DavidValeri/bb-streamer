@@ -114,7 +114,7 @@ def run(args, city):
 
     if feeder.battery.percentage < args.min_battery_level:
         LOGGER.error(
-            "Battery level, %s, is less than %s. Entering recovery state.",
+            "Battery level, %s, is less than %s.",
             feeder.battery.percentage,
             args.min_battery_level)
         set_recovery()
@@ -124,9 +124,11 @@ def run(args, city):
     if os.path.exists(RECOVERY_FILE_PATH):
         if feeder.battery.percentage < args.min_starting_battery_level:
             LOGGER.error(
-                "Battery level, %s, is less than %s. Not starting stream due to recovery state.",
+                "Battery level, %s, is less than minimum required to start stream, %s.",
                 feeder.battery.percentage,
                 args.min_starting_battery_level)
+            set_recovery()
+            set_cooldown()
             return 8
 
     clear_recovery()
