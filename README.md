@@ -118,7 +118,7 @@ cameras:
 
 Configure BB Streamer Publisher to publish the stream to Frigate's go2rtc instance using a URL such as `rtsp://<RTSP_USER>:<RTSP_PASS>@<FRIGATE_HOST>:8554/Bird_Buddy_4`. You can use the IP or domain name for your host if you run Frigate and BB Streamer on different hosts or you can use the Frigate container name if you are running BB Streamer and Frigate containers on the same host.
 
-If you want to play around with generative AI general purpose models, here is an example configuration that has been used with Google's gemini-2.0-flash model.
+If you want to play around with generative AI general purpose models, here is an example configuration that has been used with Google's gemini-2.0-flash model. Replace <CITY> and <STATE> with your location.
 
 ```
 genai:
@@ -130,7 +130,7 @@ genai:
       Observe the bird to identify the bird species and information about it like sex and age.
       If there is more than one bird in the picture, focus on the most prominent bird
       in the image or the bird with a box drawn around it. The picture was taken today 
-      in Herndon, VA at a bird feeder. Use this time, location, and behavior data to
+      in <CITY>, <STATE> at a bird feeder. Use this time, location, and behavior data to
       help identify the bird and rule out unlikely birds. 
 
       Your response should be a JSON object and only a JSON object. No text should 
