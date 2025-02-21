@@ -36,7 +36,7 @@ jobs:
           - dockerfile: ./docker/publisher/Dockerfile
             image: ghcr.io/${{ github.repository }}-publisher
           - dockerfile: ./docker/server/Dockerfile
-            image: ghcr.io/DavidValeri/${{ github.repository }}-server
+            image: ghcr.io/${{ github.repository }}-server
 
     permissions:
       contents: read
