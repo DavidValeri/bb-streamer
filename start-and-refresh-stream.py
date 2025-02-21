@@ -264,13 +264,13 @@ def get_feeder_by_name(bb, name):
 
     return None
 
-def run_ffmpeg(in_url, out_url, output_codec, log_level="warning"):
+def run_ffmpeg(in_url, out_url, output_codec, log_level="WARNING"):
     process = None
     try:
         command = [
             "ffmpeg",
             "-hide_banner",
-            "-loglevel", "info" if log_level == "DEBUG" else "warning",
+            "-loglevel", "info" if log_level == "DEBUG" else "error",
             "-i", in_url,
             "-c:v", output_codec,
             "-c:a", "copy",
