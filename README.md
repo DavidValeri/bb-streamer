@@ -21,7 +21,7 @@ Launch the container.
 docker run -v ./:/config --name bb-streamer -d --restart unless-stopped ghcr.io/davidvaleri/bb-streamer-publisher:latest --username <EMAIL> --password <PASSWORD> --feeder_name "<FEEDER_NAME>" --out_url <RTSP_TARGET> --continuous true --latitude <LATITUDE> --longitude <LONGITUDE> --timezone <TIME_ZONE_NAME>
 ```
 
-# Configuration Options
+### Configuration Options
 
 * username - REQUIRED - Your Bird Buddy username
 * password - REQUIRED - Your Bird Buddy password
@@ -50,7 +50,7 @@ docker run -v ./:/config -p 8554:8554 --name bb-streamer -d --restart unless-sto
 
 In this example, the Bird Buddy stream will be accessible at `rtsp://localhost:8554/Bird_Buddy`. See the go2rtc documentation for all available protocols, transcoding options, and more.
 
-# Configuration Options
+### Configuration Options
 * username - REQUIRED - Your Bird Buddy username
 * password - REQUIRED - Your Bird Buddy password
 * feeder_name - REQUIRED - The friendly name of your feeder as it appears in the Bird Buddy app
@@ -65,7 +65,7 @@ In this example, the Bird Buddy stream will be accessible at `rtsp://localhost:8
 
 BB Streamer can be used with Frigate's object detection capabilities to capture recordings and snapshots of visitors to your Bird Buddy feeders. Birds are fast moving things so the setup below increases the detection frame rate to improve the chances of detecting visitors. BB Streamer has not been tested with the base (free) Frigate model. The Frigate Plus model has moderate success out of the box; however, adding your own images of birds at your feeder dramatically increases detection rates. You may want to lower the confidence thresholds for bird objects to start and increase it again after training a Frigate+ model with your own labeled images. Since you may end up with thousands of tracked bird objects in a matter of days, you may want to disable generative AI on detections from your Bird Buddy cameras if you have them enabled in your setup. The built-in generative AI features in Frigate, although not able to set sub-labels, combined with a custom prompt for bird objects, does open the door to some interesting possibilities to generate human readable or structured machine readable data on the species, sex, etc. in the description of detected birds.
 
-Add empty streams to the go2rtc section for your Bird Buddy feeders.
+Add empty streams to the go2rtc section for your Bird Buddy feeders. Note that if you have more than one stream, you will need to put each Bird Buddy into its own account to avoid issues with Bird Budy's restrictions and the way BB Streamer works.
 
 ```
 go2rtc:
@@ -129,43 +129,54 @@ genai:
   object_prompts:
     bird: > 
       Observe the bird to identify the bird species and information about it like sex and age.
-      If there is more than one bird in the picture, focus on the most prominent bird
-      in the image or the bird with a box drawn around it. The picture was taken today 
-      in <CITY>, <STATE> at a bird feeder. Use this time, location, and behavior data to
-      help identify the bird and rule out unlikely birds. 
 
-      Your response should be a JSON object and only a JSON object. No text should 
-      appear in the response other than the JSON object itself. The object attributes 
+      If there is more than one bird in the picture, focus on the most prominent bird
+      in the image or the bird with a box drawn around it. The picture was taken today
+      in <CITY>, <STATE> at a bird feeder. Use this time, location, and behavior data to
+      help identify the bird and rule out unlikely birds. When judging the quality of the
+      photo, you are a hard critic.
+
+      Your response should be a JSON object and only a JSON object. No text should
+      appear in the response other than the JSON object itself. The object attributes
       are described below.
 
-      commonName - The bird's complete common name in title case.
+      commonName - The bird's complete common name in title case. If unknown, set to null.
 
-      confidence - A percentage, 0 to 1, representing the confidence of the bird 
-      identification. Do not use any text in the image to determine this value.
+      scientificName - The scientific name of the bird identification. If unknown, set
+      to null.
 
-      scientificName - The scientific name of the bird identification.
+      confidence - A percentage, 0 to 1, representing the confidence of the bird species
+      identification. Do not use any text in the image to determine this value.If the
+      species is unknown, set to 0.
 
-      sex - If the identified bird species is sexually dimorphic, identify the 
-      likely sex. Use "male" or "female" as the values. If the sex cannot be determined, 
-      use "unknown".
+      sex - If the identified bird species is sexually dimorphic, identify the
+      likely sex. Use "MALE" or "FEMALE" as the values. If the sex cannot be determined,
+      use "UNKNOWN".
 
-      age - The category best matching the bird's age. Use "juvenile", "immature", "adult",
-      or "unkown".
+      age - The category best matching the bird's age. Use "JUVENILE", "IMMATURE", "ADULT",
+      or "UNKNOWN".
 
-      quality - An object describing the quality of the image based on the attribute 
+      quality - An object describing the quality of the image based on the attribute
       definitions below. Give all scores as a numeric value from 0 to 1.
 
       framing - Is the bird fully in the frame? 0 means none of the bird is visible and 1 means
       the entire bird is visible.
 
       focus - Is the bird in sharp focus with no signs of motion blur? 0 means the entire bird
-      is blury and 1 means the entire bird is in sharp focus.
+      is blurry and 1 means the entire bird is in sharp focus.
 
-      exposure - Is the exposure of the bird good? Lower scores indicate that the bird is in
-      shadow, silhouette, or is overexposed and details of the bird are lost in the picture.
+      exposure - Judge the exposure of the bird and only the bird. 0 means that the bird
+      is in shadow, silhouette, or is overexposed. 1 means that the bird is well exposed and
+      details are clearly visible.
+
+      sayCheese - A measure of how much of the bird's head and beak are visible in the frame.
+      0 means that none of the bird's head and beak are in the frame or you can only see the 
+      back or top of the bird's head. 1 means the bird's entire head and beak are the frame and
+      that the view of these features is a profile view, looking straight on at the camera, or
+      something between these two extremes.
 
       composite - The value is based on the following formula
-      (isInFrame * 0.3 + isInFocus * 0.5 + isWellLit * 0.2).
+      (framing * 0.1 + sayCheese * 0.4 + focus * 0.3 + exposure * 0.2).
   objects:
     - bird
 ```
