@@ -83,11 +83,9 @@ def main():
 
     return_code = 0
     splash_ffmpeg_process = None
-    while (not terminate):
+    while not terminate:
 
         LOGGER.info("Starting / Restarting stream.")
-
-        return_code = run(args, city, splash_ffmpeg_process)
 
         if args.continuous:
             if (splash_ffmpeg_process is None or splash_ffmpeg_process.poll() is not None):
@@ -98,6 +96,9 @@ def main():
                 else:
                     LOGGER.info("Splash ffmpeg started.")
 
+        return_code = run(args, city, splash_ffmpeg_process)
+
+        if args.continuous:
             time.sleep(5)
         else:
             terminate = True
@@ -137,7 +138,7 @@ def run(args, city, splash_ffmpeg_process):
             args.feeder_name,
             [feeder.name for feeder in bb.feeders.values()])
         return 4
-    
+
     if feeder.state != FeederState.READY_TO_STREAM and feeder.state != FeederState.STREAMING:
         LOGGER.error("Feeder state, '%s', is not streaming or ready to stream.", feeder.state)
         if feeder.state in [FeederState.DEEP_SLEEP, FeederState.OFFLINE, FeederState.OFF_GRID, FeederState.OUT_OF_FEEDER]:
@@ -231,13 +232,9 @@ def run(args, city, splash_ffmpeg_process):
             LOGGER.info("Stopping stream to allow feeder to enter deep sleep state.")
             break
 
-    stop_ffmpeg(restream_ffmpeg_process)
+    stop_ffmpeg(restream_ffmpeg_process, "restream")
 
     return 0
-
-def clear_recovery():
-    if os.path.exists(RECOVERY_FILE_PATH):
-        os.remove(RECOVERY_FILE_PATH)
 
 def init_bb(args):
     if os.path.exists(TOKEN_FILE_PATH):
@@ -280,6 +277,10 @@ def set_recovery():
     with open(RECOVERY_FILE_PATH, 'w') as f:
         f.write('')
 
+def clear_recovery():
+    if os.path.exists(RECOVERY_FILE_PATH):
+        os.remove(RECOVERY_FILE_PATH)
+
 def is_sleepy_time(city):
     s = sun(city.observer, tzinfo=city.timezone)
     sunset = s['sunset']
@@ -318,12 +319,6 @@ def run_splash_ffmpeg(out_url, output_codec, log_level="WARNING"):
             "-stream_loop", "-1",
             "-i", "bb-streamer-splash.mp4",
             "-c:v", "copy",
-            # "-loop", "1",
-            # "-i", "bb-streamer-splash.png",
-            # "-r", "1",
-            # "-c:v", "libx265" if output_codec == "copy" else output_codec,
-            # "-crf", "18",
-            # "-preset", "fast",
             "-s", "1536x2048",
             "-f", "rtsp",
             out_url
