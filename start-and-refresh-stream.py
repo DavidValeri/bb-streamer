@@ -29,10 +29,11 @@ from astral import LocationInfo
 from astral.sun import sun
 from datetime import datetime, timedelta
 
-terminate = False
 RECOVERY_FILE_PATH = "/config/recovery"
 TOKEN_FILE_PATH = "/config/tokens"
 COOLDOWN_FILE_PATH = "/config/cooldown"
+
+terminate = False
 
 def main():
     global root
@@ -44,10 +45,31 @@ def main():
     parser.add_argument('--feeder_name', type=str, required=True, help='Feeder name')
     parser.add_argument('--out_url', type=str, required=True, help='Output URL for ffmpeg')
     parser.add_argument('--log_level', type=str, default='INFO', help='Log level. Default INFO.')
-    parser.add_argument('--min_starting_battery_level', type=int, default=70, help='Minimum battery level to start streaming after entering recovery state. Default 70%.')
-    parser.add_argument('--min_battery_level', type=int, default=40, help='Battery level at which the stream is stopped and recovery state is entered. Default 40%.')
-    parser.add_argument('--output_codec', type=str, default='copy', help='ffmpeg codec for output transcoding. Default "copy".')
-    parser.add_argument('--continuous', type=bool, default=False, help='If the program should run continuously, attempting to start / restart the stream repeatedly, or if it should try just once. Default false.')
+    parser.add_argument(
+        '--min_starting_battery_level',
+        type=int,
+        default=70,
+        help='Minimum battery level to start streaming after entering recovery state. Default 70%.')
+    parser.add_argument(
+        '--min_battery_level',
+        type=int,
+        default=40,
+        help='Battery level at which the stream is stopped and recovery state is entered. Default 40%.')
+    parser.add_argument(
+        '--output_codec',
+        type=str,
+        default='copy',
+        help='ffmpeg codec for output encoding. Default "copy".')
+    parser.add_argument(
+        '--continuous',
+        type=bool,
+        default=True,
+        help=(
+            'If the program should run continuously, attempting to start / restart the stream repeatedly and '
+            'streaming a splash screen if the real stream is unavailable, or if it should try just once. '
+            'Default true.'
+        )
+    )
     parser.add_argument('--latitude', type=float, required=True, help='Latitude for location.')
     parser.add_argument('--longitude', type=float, required=True, help='Longitude for location.')
     parser.add_argument('--timezone', type=str, required=True, help='Timezone for location.')
@@ -57,21 +79,36 @@ def main():
     root.setLevel(args.log_level)
 
     city = LocationInfo("Home", "WhereItsAt", args.timezone, latitude=args.latitude, longitude=args.longitude)
-    LOGGER.debug("Using $s for sunset calculations.", city)
+    LOGGER.debug("Using %s for sunset calculations.", city)
 
     return_code = 0
+    splash_ffmpeg_process = None
     while (not terminate):
+
         LOGGER.info("Starting / Restarting stream.")
-        return_code = run(args, city)
-        if not args.continuous:
-            break
-        time.sleep(5)
+
+        return_code = run(args, city, splash_ffmpeg_process)
+
+        if args.continuous:
+            if (splash_ffmpeg_process is None or splash_ffmpeg_process.poll() is not None):
+                splash_ffmpeg_process = run_splash_ffmpeg(args.out_url, args.output_codec, args.log_level)
+
+                if (splash_ffmpeg_process is None or splash_ffmpeg_process.poll() is not None):
+                    LOGGER.error("Error starting splash ffmpeg. Continuing anyway.")
+                else:
+                    LOGGER.info("Splash ffmpeg started.")
+
+            time.sleep(5)
+        else:
+            terminate = True
+
+    stop_ffmpeg(splash_ffmpeg_process, "splash")
 
     LOGGER.info("Goodbye.")
 
     return return_code
 
-def run(args, city):
+def run(args, city, splash_ffmpeg_process):
     global terminate
 
     if is_in_cooldown():
@@ -146,19 +183,21 @@ def run(args, city):
         set_cooldown()
         return 9
 
-    ffmpeg_process = run_ffmpeg(
+    stop_ffmpeg(splash_ffmpeg_process, "splash")
+
+    restream_ffmpeg_process = run_restream_ffmpeg(
         in_url,
         args.out_url,
         args.output_codec,
         args.log_level)
 
-    if ffmpeg_process is None:
+    if restream_ffmpeg_process is None:
         return 10
 
-    LOGGER.info("ffmpeg started.")
+    LOGGER.info("Restream ffmpeg started.")
 
     # Refresh stream every 30 seconds. Recheck feeder states every 5 minutes.
-    while not terminate and ffmpeg_process.poll() is None:
+    while not terminate and restream_ffmpeg_process.poll() is None:
         i = 0
         while i < 10 and not terminate:
             j = 0
@@ -180,7 +219,10 @@ def run(args, city):
             LOGGER.warning("Error refreshing Bird Buddy: %s", e)
 
         if feeder.battery.percentage < args.min_battery_level:
-            LOGGER.error("Battery level, %s, is less than %s. Entering recovery state.", feeder.battery.percentage, args.min_battery_level)
+            LOGGER.error(
+                "Battery level, %s, is less than %s. Entering recovery state.",
+                feeder.battery.percentage,
+                args.min_battery_level)
             set_recovery()
             set_cooldown()
             break
@@ -189,18 +231,7 @@ def run(args, city):
             LOGGER.info("Stopping stream to allow feeder to enter deep sleep state.")
             break
 
-    if ffmpeg_process.poll() is None:
-        LOGGER.info("Stopping ffmpeg...")
-        if ffmpeg_process.poll() is None:
-            LOGGER.info("ffmpeg process still running. Terminating...")
-            ffmpeg_process.terminate()
-            time.sleep(2)
-            if ffmpeg_process.poll() is None:
-                LOGGER.info("ffmpeg process still running. Killing...")
-                os.killpg(os.getpgid(ffmpeg_process.pid), signal.SIGKILL)
-
-    LOGGER.info("ffmpeg process stopped.")
-    LOGGER.debug("ffmpeg process return code: %s", ffmpeg_process.returncode)
+    stop_ffmpeg(restream_ffmpeg_process)
 
     return 0
 
@@ -264,21 +295,51 @@ def get_feeder_by_name(bb, name):
 
     return None
 
-def run_ffmpeg(in_url, out_url, output_codec, log_level="WARNING"):
-    process = None
-    try:
-        command = [
+def run_restream_ffmpeg(in_url, out_url, output_codec, log_level="WARNING"):
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "info" if log_level == "DEBUG" else "error",
+        "-i", in_url,
+        "-c:v", output_codec,
+        "-c:a", "copy",
+        "-f", "rtsp",
+        out_url
+    ]
+
+    return run_ffmpeg(command)
+
+def run_splash_ffmpeg(out_url, output_codec, log_level="WARNING"):
+    command = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "info" if log_level == "DEBUG" else "error",
-            "-i", in_url,
-            "-c:v", output_codec,
-            "-c:a", "copy",
-            "-f", "rtsp", out_url
+            "-re",
+            "-stream_loop", "-1",
+            "-i", "bb-streamer-splash.mp4",
+            "-c:v", "copy",
+            # "-loop", "1",
+            # "-i", "bb-streamer-splash.png",
+            # "-r", "1",
+            # "-c:v", "libx265" if output_codec == "copy" else output_codec,
+            # "-crf", "18",
+            # "-preset", "fast",
+            "-s", "1536x2048",
+            "-f", "rtsp",
+            out_url
         ]
 
+    return run_ffmpeg(command)
+
+def run_ffmpeg(command):
+    process = None
+    try:
         LOGGER.debug("ffmpeg command: %s", command)
-        process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr, preexec_fn=os.setsid)
+        process = subprocess.Popen(
+            command,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+            preexec_fn=os.setsid)
         LOGGER.debug("ffmpeg process started: %s", process.pid)
     except FileNotFoundError:
         LOGGER.error("ffmpeg not found. Make sure it's installed and in your PATH.")
@@ -286,6 +347,20 @@ def run_ffmpeg(in_url, out_url, output_codec, log_level="WARNING"):
         LOGGER.error("Error starting ffmpeg: %s", e)
 
     return process
+
+def stop_ffmpeg(ffmpeg_process, name):
+    if ffmpeg_process is not None and ffmpeg_process.poll() is None:
+        LOGGER.info("Stopping %s ffmpeg...", name)
+        if ffmpeg_process.poll() is None:
+            LOGGER.info("%s ffmpeg process still running. Terminating...", name)
+            ffmpeg_process.terminate()
+            time.sleep(2)
+            if ffmpeg_process.poll() is None:
+                LOGGER.warning("%s ffmpeg process still running. Killing...", name)
+                os.killpg(os.getpgid(ffmpeg_process.pid), signal.SIGKILL)
+
+        LOGGER.info("Stopped %s ffmpeg process.", name)
+        LOGGER.debug("%s ffmpeg process return code: %s", ffmpeg_process.returncode, name)
 
 def signal_handler(sig, frame):
     global terminate

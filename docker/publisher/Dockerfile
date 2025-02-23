@@ -30,6 +30,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the application code
 COPY ../../start-and-refresh-stream.py .
 COPY ../../pybirdbuddy /app/pybirdbuddy/
+COPY ../../bb-streamer-splash.mp4 .
 
 # Set the entry point to start the application
 ENTRYPOINT ["python", "start-and-refresh-stream.py"]

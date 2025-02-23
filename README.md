@@ -146,7 +146,7 @@ genai:
       to null.
 
       confidence - A percentage, 0 to 1, representing the confidence of the bird species
-      identification. Do not use any text in the image to determine this value.If the
+      identification. Do not use any text in the image to determine this value. If the
       species is unknown, set to 0.
 
       sex - If the identified bird species is sexually dimorphic, identify the
