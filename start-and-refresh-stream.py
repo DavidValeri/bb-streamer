@@ -208,7 +208,10 @@ def run(args, city, splash_ffmpeg_process):
 
             try:
                 refresh_result = asyncio.run(bb.watching_active_keep())
-                LOGGER.info("Refreshed stream. %s", refresh_result)
+                if LOGGER.isEnabledFor(logging.DEBUG):
+                    LOGGER.debug("Refreshed stream. %s", refresh_result)
+                else:
+                    LOGGER.info("Refreshed stream.",)
             except Exception as e:
                 LOGGER.warning("Error refreshing stream: %s", e)
             i += 1
@@ -345,17 +348,15 @@ def run_ffmpeg(command):
 
 def stop_ffmpeg(ffmpeg_process, name):
     if ffmpeg_process is not None and ffmpeg_process.poll() is None:
-        LOGGER.info("Stopping %s ffmpeg...", name)
+        LOGGER.info("%s ffmpeg process is running. Terminating...", name)
+        ffmpeg_process.terminate()
+        time.sleep(2)
         if ffmpeg_process.poll() is None:
-            LOGGER.info("%s ffmpeg process still running. Terminating...", name)
-            ffmpeg_process.terminate()
-            time.sleep(2)
-            if ffmpeg_process.poll() is None:
-                LOGGER.warning("%s ffmpeg process still running. Killing...", name)
-                os.killpg(os.getpgid(ffmpeg_process.pid), signal.SIGKILL)
+            LOGGER.warning("%s ffmpeg process still running. Killing...", name)
+            os.killpg(os.getpgid(ffmpeg_process.pid), signal.SIGKILL)
 
         LOGGER.info("Stopped %s ffmpeg process.", name)
-        LOGGER.debug("%s ffmpeg process return code: %s", ffmpeg_process.returncode, name)
+        LOGGER.debug("%s ffmpeg process return code: %s", name, ffmpeg_process.returncode)
 
 def signal_handler(sig, frame):
     global terminate

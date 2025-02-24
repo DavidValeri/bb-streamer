@@ -12,13 +12,16 @@ This project was built to stream Bird Buddy feeds into Frigate for object detect
 Both options expect a volume attached at `/config`. BB Streamer uses this folder to store state information such as cached API tokens and information about recovery and cooldown states. You can delete any file in this folder without concern. BB Streamer will recreate the files as it runs.
 
 ## Publisher
-You can run the bb-stream-publisher image to push the stream to an endpoint, such as go2rtc or Frigate. The stream is started / restarted while the container is running, stopping only when the feeder is asleep or the battery is too low. See the configuration options below to fine tune the container's behavior.
 
-This approach is preferred for usage with projects such as Frigate as it removes the complexity of multiple layers of timeouts working against each other. For example, Frigate has hardcoded timeouts on detect / record processes, configurable timeouts on its own ffmpeg child processes, and configurable timeouts on go2rtc when in use. A Bird Buddy stream rarely initializes in less than the hardcoded timeouts on Frigate's detect / record processes and you end up in a cycle of disconnects and retries as a result. This approach avoids these timeouts and makes you life easier.
+This approach is preferred when you don't intend to perform any transcoding in BB Streamer itself, you have another system listening for incoming streams, and/or you want the minimal footprint possible for BB Streamer.
+
+You can run the bb-stream-publisher image to push the stream to an external endpoint, such as a go2rtc instance or Frigate. The Bird Buddy stream is started / restarted while the container is running, stopping only when the feeder is asleep or the battery is too low. If run in `continuous` mode, the default, a splash screen is streamed when the Bird Buddy stream is not active.
+
+See the configuration options below to fine tune the BB Streamer's behavior.
 
 Launch the container.
 ```
-docker run -v ./:/config --name bb-streamer -d --restart unless-stopped ghcr.io/davidvaleri/bb-streamer-publisher:latest --username <EMAIL> --password <PASSWORD> --feeder_name "<FEEDER_NAME>" --out_url <RTSP_TARGET> --continuous true --latitude <LATITUDE> --longitude <LONGITUDE> --timezone <TIME_ZONE_NAME>
+docker run -v ./:/config --name bb-streamer -d --restart unless-stopped ghcr.io/davidvaleri/bb-streamer-publisher:latest --username <EMAIL> --password <PASSWORD> --feeder_name "<FEEDER_NAME>" --out_url <RTSP_TARGET> --latitude <LATITUDE> --longitude <LONGITUDE> --timezone <TIME_ZONE_NAME>
 ```
 
 ### Configuration Options
@@ -27,7 +30,7 @@ docker run -v ./:/config --name bb-streamer -d --restart unless-stopped ghcr.io/
 * password - REQUIRED - Your Bird Buddy password
 * feeder_name - REQUIRED - The friendly name of your feeder as it appears in the Bird Buddy app
 * out_url - REQUIRED - The RTSP URL to publish the stream to
-* continuous - OPTIONAL - Defaults to false. If false, the process will run once to completion and stop. You container configuration in Docker will handle the restart behavior at that point. Set to true to allow the BB Streamer to handle retries and error handling internally. In this deployment model, it is recommended to set the vaue to true.
+* continuous - OPTIONAL - Defaults to true. If false, the process will run once to completion and stop. The container configuration in Docker will handle the restart behavior at that point. Set to true to allow the BB Streamer to handle retries and error handling internally while streaming a splash screen when the Bird Buddy stream is not active.
 * latitude - REQUIRED - The latitude of the camera location as a decimal number of degrees. For example -0.1403923937279329.
 * longitude - REQUIRED - The longitude of the camera location as a decimal number of degrees. For example -90.40930143839682.
 * timezone - REQUIRED - The timezone of the camera location as a string. For example America/New_York. You can find a human readable list to choose from on Wikipedia's [List of tz database time zones](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
@@ -35,17 +38,23 @@ docker run -v ./:/config --name bb-streamer -d --restart unless-stopped ghcr.io/
 * min_battery_level - OPTIONAL - The battery level below which recovery state begins. See min_starting_battery_level. Defaults to 40%
 
 ## Server
-You can run the bb-streamer-server image to make the stream available via go2rtc. The stream is initialized on demand when there is one or more active consumers connected to the go2rtc server. It should be noted that the initialization of the stream can take some time and therefore client timeouts should be fairly generous, on the order of 45 seconds or more, in order to avoid the client disconnecting and go2rtc terminating the stream while it is still being initialized. The stream will not start when the feeder is aspleep or the battery is too low. See start-and-refresh-stream.py's configuration options to fine tune the allowed battery level ranges.
+This approach is preferred when you intend to perform transcoding in BB Streamer via go2rtc, you want to view the stream in a client such as VLC, or you have other complex needs that can be handled via configuration in go2rtc.
+
+You can run the bb-streamer-server image to make the stream available via WebRTC, RTSP, and other protocols via go2rtc. The Bird Buddy stream is started / restarted on demand when there is one or more active consumers connected to the go2rtc server.
+
+Note that the initialization of the stream can take some time and client timeouts should be fairly generous, on the order of 45 seconds or more, in order to avoid the client disconnecting and go2rtc terminating the stream while it is still being initialized.
+
+See the configuration options below to fine tune the BB Streamer's behavior.
 
 Create minimal go2rtc.yaml file defining your Bird Buddy feeder stream(s).
 ```
 streams:
-  Bird_Buddy: exec:/app/start-and-refresh-stream.py --username <EMAIL> --password <PASSWORD> --feeder_name "<FEEDER_NAME>" --out_url {output} --latitude <LATITUDE> --longitude <LONGITUDE> --timezone <TIME_ZONE_NAME>#killsignal=15#killtimeout=15
+  Bird_Buddy: exec:/app/start-and-refresh-stream.py --username <EMAIL> --password <PASSWORD> --feeder_name "<FEEDER_NAME>" --continuous false --out_url {output} --latitude <LATITUDE> --longitude <LONGITUDE> --timezone <TIME_ZONE_NAME>#killsignal=15#killtimeout=15
 ```
 
 Launch the container, forwarding ports or using host networking for the supported go2rtc protocols that you want to restream over.
 ```
-docker run -v ./:/config -p 8554:8554 --name bb-streamer -d --restart unless-stopped ghcr.io/davidvaleri/bb-streamer-server:latest
+docker run -v ./:/config -p 8554:8554 --name bb-streamer-4 -d --restart unless-stopped ghcr.io/davidvaleri/bb-streamer-server:latest
 ```
 
 In this example, the Bird Buddy stream will be accessible at `rtsp://localhost:8554/Bird_Buddy`. See the go2rtc documentation for all available protocols, transcoding options, and more.
@@ -54,7 +63,8 @@ In this example, the Bird Buddy stream will be accessible at `rtsp://localhost:8
 * username - REQUIRED - Your Bird Buddy username
 * password - REQUIRED - Your Bird Buddy password
 * feeder_name - REQUIRED - The friendly name of your feeder as it appears in the Bird Buddy app
-* out_url - REQUIRED - The RTSP URL to publish the stream to
+* out_url - REQUIRED - The RTSP URL to publish the stream to. In this deployment model, use the {output} token so go2rtc can provide the dynamic target URL.
+* continuous - REQUIRED - Must be false in this mode of usage.
 * latitude - REQUIRED - The latitude of the camera location as a decimal number of degrees. For example -0.1403923937279329.
 * longitude - REQUIRED - The longitude of the camera location as a decimal number of degrees. For example -90.40930143839682.
 * timezone - REQUIRED - The timezone of the camera location as a string. For example America/New_York. You can find a human readable list to choose from on Wikipedia's [List of tz database time zones](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
@@ -119,7 +129,7 @@ cameras:
 
 Configure BB Streamer Publisher to publish the stream to Frigate's go2rtc instance using a URL such as `rtsp://<RTSP_USER>:<RTSP_PASS>@<FRIGATE_HOST>:8554/Bird_Buddy_4`. You can use the IP or domain name for your host if you run Frigate and BB Streamer on different hosts or you can use the Frigate container name if you are running BB Streamer and Frigate containers on the same host.
 
-If you want to play around with generative AI general purpose models, here is an example configuration that has been used with Google's gemini-2.0-flash model. Replace `<CITY>` and `<STATE>` with your location.
+If you want to play around with generative AI general purpose models, here is an example configuration that has been used with Google's gemini-2.0-flash model. Replace `<CITY>` and `<STATE>` with your location. This example by no means replaces a specialized species classification model, but it does demonstrate some ideas such as using AI to help cull out lower quality pictures and attempting to capture age and sex information.
 
 ```
 genai:
