@@ -81,8 +81,8 @@ def main():
     city = LocationInfo("Home", "WhereItsAt", args.timezone, latitude=args.latitude, longitude=args.longitude)
     LOGGER.debug("Using %s for sunset calculations.", city)
 
-    return_code = 0
     splash_ffmpeg_process = None
+
     while not terminate:
 
         LOGGER.info("Starting / Restarting stream.")
@@ -96,7 +96,7 @@ def main():
                 else:
                     LOGGER.info("Splash ffmpeg started.")
 
-        return_code = run(args, city, splash_ffmpeg_process)
+        run(args, city, splash_ffmpeg_process)
 
         if args.continuous:
             time.sleep(5)
@@ -107,14 +107,14 @@ def main():
 
     LOGGER.info("Goodbye.")
 
-    return return_code
+    return
 
 def run(args, city, splash_ffmpeg_process):
     global terminate
 
     if is_in_cooldown():
         LOGGER.info("Cooldown period active. Skipping stream initialization.")
-        return 1
+        return
 
     clear_cooldown()
 
@@ -122,14 +122,14 @@ def run(args, city, splash_ffmpeg_process):
         bb = init_bb(args)
     except Exception as e:
         LOGGER.error("Error initializing Bird Buddy: %s", e)
-        return 2
+        return
 
     try:
         asyncio.run(bb.refresh())
         save_tokens(bb)
     except Exception as e:
         LOGGER.error("Error refreshing Bird Buddy: %s", e)
-        return 3
+        return
 
     feeder = get_feeder_by_name(bb, args.feeder_name)
     if not feeder:
@@ -137,18 +137,18 @@ def run(args, city, splash_ffmpeg_process):
             "Feeder with name '%s' not found. Available feeders: %s",
             args.feeder_name,
             [feeder.name for feeder in bb.feeders.values()])
-        return 4
+        return
 
     if feeder.state != FeederState.READY_TO_STREAM and feeder.state != FeederState.STREAMING:
         LOGGER.error("Feeder state, '%s', is not streaming or ready to stream.", feeder.state)
         if feeder.state in [FeederState.DEEP_SLEEP, FeederState.OFFLINE, FeederState.OFF_GRID, FeederState.OUT_OF_FEEDER]:
             set_cooldown()
-        return 5
+        return
 
     if is_sleepy_time(city):
         LOGGER.info("Feeder is preparing to enter deep sleep state. Skipping stream initialization.")
         set_cooldown()
-        return 6
+        return
 
     if feeder.battery.percentage < args.min_battery_level:
         LOGGER.error(
@@ -157,7 +157,7 @@ def run(args, city, splash_ffmpeg_process):
             args.min_battery_level)
         set_recovery()
         set_cooldown()
-        return 7
+        return
 
     if os.path.exists(RECOVERY_FILE_PATH):
         if feeder.battery.percentage < args.min_starting_battery_level:
@@ -167,7 +167,7 @@ def run(args, city, splash_ffmpeg_process):
                 args.min_starting_battery_level)
             set_recovery()
             set_cooldown()
-            return 8
+            return
 
     clear_recovery()
 
@@ -176,13 +176,13 @@ def run(args, city, splash_ffmpeg_process):
 
     if terminate:
         LOGGER.info("Received termination signal. Skipping stream initialization.")
-        return 0
+        return
 
     in_url = result["watching"]["streamUrl"]
     if in_url is None:
         LOGGER.error("Stream URL was empty.")
         set_cooldown()
-        return 9
+        return
 
     stop_ffmpeg(splash_ffmpeg_process, "splash")
 
@@ -193,7 +193,7 @@ def run(args, city, splash_ffmpeg_process):
         args.log_level)
 
     if restream_ffmpeg_process is None:
-        return 10
+        return
 
     LOGGER.info("Restream ffmpeg started.")
 
@@ -237,7 +237,7 @@ def run(args, city, splash_ffmpeg_process):
 
     stop_ffmpeg(restream_ffmpeg_process, "restream")
 
-    return 0
+    return
 
 def init_bb(args):
     if os.path.exists(TOKEN_FILE_PATH):
@@ -299,20 +299,6 @@ def get_feeder_by_name(bb, name):
 
     return None
 
-def run_restream_ffmpeg(in_url, out_url, output_codec, log_level="WARNING"):
-    command = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel", "info" if log_level == "DEBUG" else "error",
-        "-i", in_url,
-        "-c:v", output_codec,
-        "-c:a", "copy",
-        "-f", "rtsp",
-        out_url
-    ]
-
-    return run_ffmpeg(command)
-
 def run_splash_ffmpeg(out_url, output_codec, log_level="WARNING"):
     command = [
             "ffmpeg",
@@ -326,6 +312,20 @@ def run_splash_ffmpeg(out_url, output_codec, log_level="WARNING"):
             "-f", "rtsp",
             out_url
         ]
+
+    return run_ffmpeg(command)
+
+def run_restream_ffmpeg(in_url, out_url, output_codec, log_level="WARNING"):
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "info" if log_level == "DEBUG" else "error",
+        "-i", in_url,
+        "-c:v", output_codec,
+        "-c:a", "copy",
+        "-f", "rtsp",
+        out_url
+    ]
 
     return run_ffmpeg(command)
 
@@ -357,6 +357,8 @@ def stop_ffmpeg(ffmpeg_process, name):
 
         LOGGER.info("Stopped %s ffmpeg process.", name)
         LOGGER.debug("%s ffmpeg process return code: %s", name, ffmpeg_process.returncode)
+    else:
+        LOGGER.info("%s ffmpeg process is not running.", name)
 
 def signal_handler(sig, frame):
     global terminate
