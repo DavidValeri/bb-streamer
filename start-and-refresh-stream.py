@@ -23,8 +23,8 @@ import argparse
 import signal
 import os
 
-from pybirdbuddy.birdbuddy.client import BirdBuddy
-from pybirdbuddy.birdbuddy.feeder import FeederState
+from birdbuddy.client import BirdBuddy
+from birdbuddy.feeder import FeederState
 from astral import LocationInfo
 from astral.sun import sun
 from datetime import datetime, timedelta

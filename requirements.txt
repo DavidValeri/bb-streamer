@@ -1,2 +1,2 @@
-pybirdbuddy
-astral
+pybirdbuddy @ git+https://github.com/DavidValeri/pybirdbuddy@Add-support-for-livestream
+astral==3.2
